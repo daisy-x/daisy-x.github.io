@@ -20,7 +20,7 @@
 <meta property="og:image" content="http://example.com/images/image-20211231145927390.png">
 <meta property="og:image" content="http://example.com/images/image-20211217172553650.png">
 <meta property="article:published_time" content="2021-12-31T06:20:56.000Z">
-<meta property="article:modified_time" content="2021-12-31T08:39:17.242Z">
+<meta property="article:modified_time" content="2021-12-31T08:54:59.103Z">
 <meta property="article:author" content="daisy-x">
 <meta name="twitter:card" content="summary">
 <meta name="twitter:image" content="http://example.com/images/image-20211230145345226.png">
@@ -124,13 +124,13 @@
 
 <p>具名参数以名称而不是位置进行参数绑定，更易维护。以上述这种用法为例，最终将生成一个预编译创造器，底层实现仍然是JdbcTemplate，使用提供的query方法进行查询，RowMapper用来将查询到的数据逐行映射到对象中。和使用PreparedStatement进行参数绑定一样，都可以实现预编译并避免SQL注入风险。</p>
 <p><img src="/images/image-20211230145345226.png" alt="image-20211230145345226"></p>
-<p>针对这种误报，规则中只需检查两点，也就是只要<strong>正确</strong>使用了<strong>NamedParameterJdbcTemplate</strong>模板进行数据库操作即可。为了保证这两点，一开始我使用的规则是这样的，<code>$SQL</code>、 <code>$X</code> 都代表变量，<code>...</code>在Semgrep中表示任意值，相当于正则表达式中的<code>.*</code>。校验使用了map对象（进行传参）和NamedParameterJdbcTemplate实例化后的对象，这个规则可以消除上述用法的误报，但是具名参数不只是这一种用法，实例化后的对象名也不会是固定的。</p>
+<p>针对这种误报，规则中只需检查两点，也就是只要<strong>正确</strong>使用了<strong>NamedParameterJdbcTemplate</strong>模板进行数据库操作即可。为了保证这两点，一开始我使用了下面这个规则，<code>$SQL</code>、 <code>$X</code> 都代表变量，<code>...</code>在Semgrep中表示任意值，相当于正则表达式中的<code>.*</code>。校验使用了map对象（进行传参）和NamedParameterJdbcTemplate实例化后的对象，这个规则可以消除上述用法的误报。但是，具名参数不只是这一种用法，实例化后的对象名也不会是固定的。</p>
 <figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">- pattern-not: |</span><br><span class="line">      String $SQL = $X + $Y;</span><br><span class="line">      ...</span><br><span class="line">      new HashMap&lt;&gt;();</span><br><span class="line">      ...</span><br><span class="line">      namedParameterJdbcTemplate.query($SQL, ...);   </span><br></pre></td></tr></table></figure>
 
 <p>所以，我查看了下NamedParameterJdbcTemplate.java中所有的函数，发现都使用了预编译:D。于是规则改成了这样：</p>
 <figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">- pattern-not: |</span><br><span class="line">      String $SQL = $X + $Y;</span><br><span class="line">      ...</span><br><span class="line">      NamedParameterJdbcTemplate $NPJT = $M;</span><br><span class="line">      ...</span><br><span class="line">      $NPJT.query($SQL, ...);</span><br></pre></td></tr></table></figure>
 
-<p>由<code>$NPJT</code>匹配所有NamedParameterJdbcTemplate实例化后的对象名，调用了其中函数的都属于误报。这个规则表面上看起来运行的不错，运行之后也确实生效了。但是！semgrep的检测方法不同于cobra和fortify，它是依靠模式匹配的方式去检测的，可以看出是一种类似伪代码的表达方式。如果其中源代码的顺序和规则不一致的话，是不会被命中的。也就是说，如果源代码改成这样：</p>
+<p>由<code>$NPJT</code>匹配所有NamedParameterJdbcTemplate实例化后的对象名，调用了其中函数的都属于误报。这个规则表面上看起来运行的不错，运行之后也确实生效了。但是，semgrep的检测方法不同于cobra和fortify，它是依靠模式匹配的方式去检测的，可以看出是一种类似伪代码的表达方式。如果其中测试代码的顺序和规则不一致的话，是不会被命中的。也就是说，如果源代码改成这样：</p>
 <figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">NamedParameterJdbcTemplate namedParameterJdbcTemplate = new NamedParameterJdbcTemplate(jdbcTemplate); </span><br><span class="line">String sql = &quot;select first_detail,last_detail from users where user_name = :username and age &lt;= :age &quot;;</span><br><span class="line">Map&lt;String,Object&gt; map =  new HashMap&lt;&gt;();</span><br><span class="line">map.put(&quot;username&quot;,username);</span><br><span class="line">map.put(&quot;age&quot;,age);</span><br><span class="line">namedParameterJdbcTemplate.query(sql,map,RowMapper&lt;T&gt; rowMapper);</span><br></pre></td></tr></table></figure>
 
 <p>只调换了下SQL行和实例化行的位置，上面那条误报清除规则就不起作用了….</p>
